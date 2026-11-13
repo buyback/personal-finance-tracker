@@ -1,0 +1,28 @@
+@inherits LayoutComponentBase
+
+<div class="app-shell">
+    <aside class="sidebar">
+        <NavMenu />
+    </aside>
+    <main class="main-content">
+        <header class="topbar">
+            <a class="topbar-search" href="/expenses" aria-label="Find an expense: open expenses">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m15.5 15.5 4.3 4.3"/></svg>
+                <span>Find an expense…</span>
+            </a>
+            <div class="topbar-actions">
+                <span class="topbar-date">@DateTime.Today.ToString("dddd, d MMMM")</span>
+                <div class="profile-chip" aria-label="Personal workspace" title="Personal workspace">D</div>
+            </div>
+        </header>
+        <section class="page-container">
+            @Body
+        </section>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

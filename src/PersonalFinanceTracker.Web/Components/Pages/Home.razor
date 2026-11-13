@@ -1,0 +1,234 @@
+@page "/"
+@inject IExpenseService ExpenseService
+
+<PageTitle>Overview | Financial Tracker</PageTitle>
+
+@if (dashboard is null)
+{
+    <div class="loading-state">Loading your spending overview…</div>
+}
+else
+{
+    <div class="dashboard-page">
+        <section class="dashboard-hero">
+            <p class="eyebrow">YOUR PERSONAL FINANCES</p>
+            <h1>@Greeting(), David</h1>
+            <p class="dashboard-summary">
+                @if (dashboard.MonthChangePercent is null)
+                {
+                    <span>You’ve spent <strong>@FormatCurrency(dashboard.TotalSpent)</strong> across @dashboard.ExpenseCount transactions in @dashboard.Month.ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US")).</span>
+                }
+                else if (dashboard.MonthChangePercent < 0)
+                {
+                    <span>Your spending is down <strong>@($"{Math.Abs(dashboard.MonthChangePercent.Value):0.#}%")</strong> from last month. You’ve spent <strong>@FormatCurrency(dashboard.TotalSpent)</strong> in @dashboard.Month.ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US")).</span>
+                }
+                else if (dashboard.MonthChangePercent > 0)
+                {
+                    <span>Your spending is up <strong>@($"{dashboard.MonthChangePercent.Value:0.#}%")</strong> from last month. You’ve spent <strong>@FormatCurrency(dashboard.TotalSpent)</strong> in @dashboard.Month.ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US")).</span>
+                }
+                else
+                {
+                    <span>You’re spending about the same as last month, with <strong>@FormatCurrency(dashboard.TotalSpent)</strong> logged in @dashboard.Month.ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US")).</span>
+                }
+            </p>
+            <div class="hero-progress" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+        </section>
+
+        <nav class="dashboard-actions" aria-label="Quick actions">
+            <a class="quick-action quick-action-primary" href="/expenses"><span aria-hidden="true">＋</span> Add expense</a>
+            <a class="quick-action" href="/imports"><span aria-hidden="true">⇧</span> Import statement</a>
+            <a class="quick-action" href="/expenses"><span aria-hidden="true">▤</span> View transactions</a>
+        </nav>
+
+        <div class="dashboard-toolbar">
+            <div><h2>Spending overview</h2><p>Choose a month and category to explore your activity.</p></div>
+            <div class="dashboard-controls">
+                <label class="visually-hidden" for="dashboard-month">Month</label>
+                <select id="dashboard-month" class="field-input" aria-label="Filter dashboard by month" @bind="selectedMonth" @bind:after="RefreshDashboardAsync">
+                    @foreach (var month in AvailableMonths)
+                    {
+                        <option value="@month">@MonthLabel(month)</option>
+                    }
+                </select>
+                <label class="visually-hidden" for="dashboard-category">Category</label>
+                <select id="dashboard-category" class="field-input" aria-label="Filter dashboard by category" @bind="selectedCategory" @bind:after="RefreshDashboardAsync">
+                    <option value="all">All categories</option>
+                    @foreach (var category in categories)
+                    {
+                        <option value="@category.Id">@category.Name</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+    <section class="stat-grid" aria-label="Monthly spending summary">
+        <article class="stat-card stat-card-primary">
+            <div class="stat-label-row"><span class="stat-label">Spent in selected month</span></div>
+            <div class="stat-value">@FormatCurrency(dashboard.TotalSpent)</div>
+            <div class="stat-footnote">@dashboard.Month.ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US"))</div>
+        </article>
+        <article class="stat-card">
+            <div class="stat-label-row"><span class="stat-label">Transactions</span></div>
+            <div class="stat-value">@dashboard.ExpenseCount</div>
+            <div class="stat-footnote">@dashboard.Month.ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US"))</div>
+        </article>
+        <article class="stat-card">
+            <div class="stat-label-row"><span class="stat-label">Daily average</span></div>
+            <div class="stat-value">@FormatCurrency(dashboard.TotalSpent / AverageDayCount)</div>
+            <div class="stat-footnote">Average per calendar day</div>
+        </article>
+        <article class="stat-card">
+            <div class="stat-label-row"><span class="stat-label">Last month</span></div>
+            <div class="stat-value">@FormatCurrency(dashboard.PreviousMonthTotal)</div>
+            <div class="stat-footnote">@dashboard.Month.AddMonths(-1).ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US"))</div>
+        </article>
+        <article class="stat-card">
+            <div class="stat-label-row"><span class="stat-label">Top category</span></div>
+            <div class="stat-value">@(dashboard.CategorySpending.FirstOrDefault()?.Name ?? "—")</div>
+            <div class="stat-footnote">@(dashboard.CategorySpending.FirstOrDefault() is { } topCategory ? FormatCurrency(topCategory.Total) : "No category data yet")</div>
+        </article>
+        <article class="stat-card">
+            <div class="stat-label-row"><span class="stat-label">Month over month</span></div>
+            <div class="stat-value">@(dashboard.MonthChangePercent is null ? "—" : $"{Math.Abs(dashboard.MonthChangePercent.Value):0.#}%")</div>
+            <div class="stat-footnote @(dashboard.MonthChangePercent is < 0 ? "positive" : dashboard.MonthChangePercent is > 0 ? "negative" : "")">
+                @(dashboard.MonthChangePercent is null ? "No comparison yet" : dashboard.MonthChangePercent < 0 ? "↓ Lower than last month" : dashboard.MonthChangePercent > 0 ? "↑ Higher than last month" : "Same as last month")
+            </div>
+        </article>
+    </section>
+
+    <section class="panel spending-chart-panel">
+        <div class="panel-heading">
+            <div><h2>Daily spending</h2><p>@(selectedCategory == "all" ? "All categories" : categories.FirstOrDefault(category => category.Id.ToString() == selectedCategory)?.Name) · @MonthLabel(selectedMonth)</p></div>
+            <strong class="chart-total">@FormatCurrency(dashboard.TotalSpent)</strong>
+        </div>
+        @if (dashboard.DailySpending.Count == 0)
+        {
+            <div class="empty-state compact-empty"><span class="empty-icon">◌</span><strong>No spending in this selection</strong><span>Choose another month or category to see the chart.</span></div>
+        }
+        else
+        {
+            <div class="chart-scroll">
+                <svg class="spending-chart" viewBox="0 0 700 250" role="img" aria-label="Daily spending chart for @MonthLabel(selectedMonth)">
+                    <title>Daily spending for @MonthLabel(selectedMonth)</title>
+                    <line x1="42" y1="205" x2="690" y2="205" class="chart-axis" />
+                    <line x1="42" y1="145" x2="690" y2="145" class="chart-gridline" />
+                    <line x1="42" y1="85" x2="690" y2="85" class="chart-gridline" />
+                    @foreach (var bar in ChartBars)
+                    {
+                        <rect @key="bar.Day" x="@bar.X" y="@bar.Y" width="@bar.Width" height="@bar.Height" rx="3" fill="@ChartColor" class="chart-bar">
+                            <title>@($"Day {bar.Day}: {FormatCurrency(bar.Total)}")</title>
+                        </rect>
+                        @if (bar.ShowLabel)
+                        {
+                            @((MarkupString)$"<text x=\"{bar.X + bar.Width / 2}\" y=\"228\" text-anchor=\"middle\" class=\"chart-label\">{bar.Day}</text>")
+                        }
+                    }
+                </svg>
+            </div>
+        }
+    </section>
+
+    <div class="dashboard-grid">
+        <section class="panel category-panel">
+            <div class="panel-heading"><div><h2>Spending by category</h2><p>Share of this month’s selected spending</p></div><span class="panel-period">@MonthLabel(selectedMonth)</span></div>
+            @if (dashboard.CategorySpending.Count == 0)
+            {
+                <div class="empty-state compact-empty"><span class="empty-icon">◌</span><strong>No spending yet</strong><span>Try another month or category.</span></div>
+            }
+            else
+            {
+                <div class="category-list">
+                    @foreach (var category in dashboard.CategorySpending)
+                    {
+                        <div class="category-item" @key="category.CategoryId">
+                            <div class="category-line"><div class="category-name"><span class="category-dot" style="background-color: @category.ColorHex"></span><span>@category.Name</span><span class="category-count">@category.ExpenseCount</span></div><div class="category-total">@FormatCurrency(category.Total)</div></div>
+                            <div class="progress-track"><div class="progress-value" style="width: @($"{category.SharePercent}%"); background-color: @category.ColorHex"></div></div>
+                        </div>
+                    }
+                </div>
+            }
+            <a class="text-link panel-link" href="/expenses">View all expenses <span aria-hidden="true">→</span></a>
+        </section>
+
+        <section class="panel recent-panel">
+            <div class="panel-heading"><div><h2>Recent expenses</h2><p>Latest transactions for this selection</p></div><a class="text-link" href="/expenses">See all <span aria-hidden="true">→</span></a></div>
+            @if (dashboard.RecentExpenses.Count == 0)
+            {
+                <div class="empty-state compact-empty"><span class="empty-icon">＋</span><strong>Nothing here yet</strong><span>Your expenses will show up here.</span></div>
+            }
+            else
+            {
+                <div class="recent-list">
+                    @foreach (var expense in dashboard.RecentExpenses)
+                    {
+                        <div class="recent-item" @key="expense.Id">
+                            <span class="expense-avatar" style="--category-color: @expense.CategoryColorHex">@CategoryMark(expense.CategoryName)</span>
+                            <div class="recent-details"><div class="recent-title">@expense.Description</div><div class="recent-meta">@expense.SpentOn.ToString("dd MMM") <span>·</span> @expense.CategoryName</div></div>
+                            <div class="recent-amount">−@FormatCurrency(expense.Amount)</div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+    </div>
+    </div>
+}
+
+@code {
+    private static readonly CultureInfo IndonesianCulture = CultureInfo.GetCultureInfo("id-ID");
+    private ExpenseDashboardDto? dashboard;
+    private List<ExpenseCategoryDto> categories = [];
+    private List<ExpenseDto> allExpenses = [];
+    private string selectedMonth = DateTime.Today.ToString("yyyy-MM");
+    private string selectedCategory = "all";
+    private IEnumerable<string> AvailableMonths => allExpenses.Select(expense => expense.SpentOn.ToString("yyyy-MM")).Append(DateTime.Today.ToString("yyyy-MM")).Distinct().OrderDescending();
+    private string ChartColor => selectedCategory == "all" ? "#398268" : categories.FirstOrDefault(category => category.Id.ToString() == selectedCategory)?.ColorHex ?? "#398268";
+    private int AverageDayCount => dashboard is null ? 1 : dashboard.Month.Year == DateTime.Today.Year && dashboard.Month.Month == DateTime.Today.Month ? DateTime.Today.Day : DateTime.DaysInMonth(dashboard.Month.Year, dashboard.Month.Month);
+
+    private IEnumerable<(int Day, decimal Total, double X, double Y, double Width, double Height, bool ShowLabel)> ChartBars
+    {
+        get
+        {
+            var days = DateTime.DaysInMonth(dashboard!.Month.Year, dashboard.Month.Month);
+            var max = dashboard.DailySpending.Max(item => item.Total);
+            const double left = 46, chartWidth = 638, baseline = 205, chartHeight = 170, gap = 4;
+            var width = (chartWidth - gap * (days - 1)) / days;
+            var values = dashboard.DailySpending.ToDictionary(item => item.Day, item => item.Total);
+            for (var day = 1; day <= days; day++)
+            {
+                var amount = values.GetValueOrDefault(day);
+                var height = amount == 0 ? 0 : Math.Max(3, (double)(amount / max) * chartHeight);
+                yield return (day, amount, left + (day - 1) * (width + gap), baseline - height, width, height, day == 1 || day % 5 == 0 || day == days);
+            }
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        categories = (await ExpenseService.GetCategoriesAsync()).ToList();
+        allExpenses = (await ExpenseService.GetExpensesAsync()).ToList();
+        if (allExpenses.Count > 0)
+            selectedMonth = allExpenses.Max(expense => expense.SpentOn).ToString("yyyy-MM");
+        await RefreshDashboardAsync();
+    }
+
+    private async Task RefreshDashboardAsync()
+    {
+        var month = DateOnly.ParseExact($"{selectedMonth}-01", "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        Guid? categoryId = Guid.TryParse(selectedCategory, out var parsed) ? parsed : null;
+        dashboard = await ExpenseService.GetDashboardAsync(month, categoryId);
+    }
+
+    private static string FormatCurrency(decimal value) => value.ToString("C0", IndonesianCulture);
+    private static string Greeting() => DateTime.Now.Hour switch
+    {
+        < 12 => "Good morning",
+        < 18 => "Good afternoon",
+        _ => "Good evening"
+    };
+    private static string MonthLabel(string value) => DateOnly.ParseExact($"{value}-01", "yyyy-MM-dd", CultureInfo.InvariantCulture).ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US"));
+    private static string CategoryMark(string category) => category switch
+    {
+        "Food & Dining" => "✦", "Transport" => "↗", "Groceries" => "⌂", "Bills & Utilities" => "▤", "Shopping" => "◇", "Health" => "+", "Entertainment" => "♪", _ => "•"
+    };
+}

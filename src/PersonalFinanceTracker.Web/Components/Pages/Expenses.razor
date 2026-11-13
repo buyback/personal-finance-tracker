@@ -1,0 +1,235 @@
+@page "/expenses"
+@inject IExpenseService ExpenseService
+
+<PageTitle>Expenses | Financial Tracker</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <p class="eyebrow">YOUR TRANSACTION JOURNAL</p>
+        <h1>Expenses</h1>
+        <p class="page-subtitle">Keep each purchase organized so your monthly picture stays clear.</p>
+    </div>
+    <a class="button-secondary" href="/">← Back to overview</a>
+</div>
+
+<div class="expense-workspace">
+    <section class="panel add-expense-panel">
+        <div class="panel-heading form-panel-heading">
+            <div><h2>Add an expense</h2><p>Record a purchase and choose where it belongs.</p></div>
+            <span class="form-heading-icon">＋</span>
+        </div>
+
+        <EditForm Model="form" OnValidSubmit="SaveExpenseAsync" FormName="add-expense">
+            <DataAnnotationsValidator />
+            <div class="form-field">
+                <label for="expense-description">What did you spend on?</label>
+                <InputText id="expense-description" class="field-input" @bind-Value="form.Description" placeholder="e.g. Lunch with a friend" />
+                <ValidationMessage For="() => form.Description" />
+            </div>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="expense-amount">Amount</label>
+                    <div class="amount-input-wrap"><span>Rp</span><InputNumber id="expense-amount" class="field-input" @bind-Value="form.Amount" min="1" step="1000" placeholder="0" /></div>
+                    <ValidationMessage For="() => form.Amount" />
+                </div>
+                <div class="form-field">
+                    <label for="expense-date">Date</label>
+                    <InputDate id="expense-date" class="field-input" @bind-Value="form.Date" />
+                    <ValidationMessage For="() => form.Date" />
+                </div>
+            </div>
+
+            <div class="form-field">
+                <label for="expense-category">Category</label>
+                <InputSelect id="expense-category" class="field-input" @bind-Value="form.CategoryId">
+                    <option value="@Guid.Empty">Choose a category</option>
+                    @foreach (var category in categories)
+                    {
+                        <option value="@category.Id">@category.Name</option>
+                    }
+                </InputSelect>
+                @if (categoryError is not null)
+                {
+                    <span class="field-validation-error">@categoryError</span>
+                }
+            </div>
+
+            <div class="form-field">
+                <label for="expense-notes">Note <span class="optional-label">Optional</span></label>
+                <InputTextArea id="expense-notes" class="field-input field-textarea" @bind-Value="form.Notes" placeholder="Add a little context…" rows="3" />
+                <ValidationMessage For="() => form.Notes" />
+            </div>
+
+            @if (saveError is not null)
+            {
+                <div class="form-alert form-alert-error">@saveError</div>
+            }
+            @if (savedMessage is not null)
+            {
+                <div class="form-alert form-alert-success">@savedMessage</div>
+            }
+
+            <button class="button-primary save-button" type="submit" disabled="@(isSaving || categories.Count == 0)">
+                @(isSaving ? "Saving…" : "Save expense") <span aria-hidden="true">→</span>
+            </button>
+        </EditForm>
+        <div class="form-security-note"><span aria-hidden="true">▣</span> Stored locally in your SQLite database</div>
+    </section>
+
+    <section class="panel expense-list-panel">
+        <div class="panel-heading expense-list-heading">
+            <div><h2>All expenses</h2><p>@FilteredExpenses.Count() transactions</p></div>
+            <div class="list-controls">
+                <label class="search-box"><span aria-hidden="true">⌕</span><input aria-label="Search expenses" @bind="searchText" @bind:event="oninput" placeholder="Search expenses" /></label>
+                <select class="field-input filter-select" aria-label="Filter by month" @bind="selectedMonth">
+                    <option value="all">All months</option>
+                    @foreach (var month in AvailableMonths)
+                    {
+                        <option value="@month">@MonthLabel(month)</option>
+                    }
+                </select>
+                <select class="field-input filter-select category-filter" aria-label="Filter by category" @bind="selectedCategory">
+                    <option value="all">All categories</option>
+                    @foreach (var category in categories)
+                    {
+                        <option value="@category.Id">@category.Name</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="loading-state list-loading">Loading expenses…</div>
+        }
+        else if (!FilteredExpenses.Any())
+        {
+            <div class="empty-state list-empty"><span class="empty-icon">◌</span><strong>No expenses match</strong><span>Try another search or add your first expense.</span></div>
+        }
+        else
+        {
+            <div class="expense-table" role="list">
+                @foreach (var expense in FilteredExpenses)
+                {
+                    <article class="expense-row" role="listitem" @key="expense.Id">
+                        <span class="expense-avatar" style="--category-color: @expense.CategoryColorHex">@CategoryMark(expense.CategoryName)</span>
+                        <div class="expense-main">
+                            <div class="expense-description">@expense.Description</div>
+                            <div class="expense-meta"><span class="category-dot" style="background-color: @expense.CategoryColorHex"></span>@expense.CategoryName <span>·</span> @expense.SpentOn.ToString("dd MMM yyyy")</div>
+                        </div>
+                        <div class="expense-value">−@FormatCurrency(expense.Amount)</div>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private static readonly CultureInfo IndonesianCulture = CultureInfo.GetCultureInfo("id-ID");
+    private List<ExpenseCategoryDto> categories = [];
+    private List<ExpenseDto> expenses = [];
+    private ExpenseForm form = new();
+    private string searchText = string.Empty;
+    private string selectedCategory = "all";
+    private string selectedMonth = "all";
+    private string? categoryError;
+    private string? saveError;
+    private string? savedMessage;
+    private bool isLoading = true;
+    private bool isSaving;
+
+    private IEnumerable<ExpenseDto> FilteredExpenses => expenses
+        .Where(expense => selectedMonth == "all" || expense.SpentOn.ToString("yyyy-MM") == selectedMonth)
+        .Where(expense => selectedCategory == "all" || expense.CategoryId.ToString() == selectedCategory)
+        .Where(expense => string.IsNullOrWhiteSpace(searchText)
+            || expense.Description.Contains(searchText, StringComparison.OrdinalIgnoreCase)
+            || expense.CategoryName.Contains(searchText, StringComparison.OrdinalIgnoreCase)
+            || (expense.Notes?.Contains(searchText, StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private IEnumerable<string> AvailableMonths => expenses
+        .Select(expense => expense.SpentOn.ToString("yyyy-MM"))
+        .Distinct()
+        .OrderDescending();
+
+    protected override async Task OnInitializedAsync()
+    {
+        categories = (await ExpenseService.GetCategoriesAsync()).ToList();
+        expenses = (await ExpenseService.GetExpensesAsync()).ToList();
+        if (categories.Count > 0)
+            form.CategoryId = categories.FirstOrDefault(category => category.Name == "Food & Dining")?.Id ?? categories[0].Id;
+        isLoading = false;
+    }
+
+    private async Task SaveExpenseAsync()
+    {
+        categoryError = form.CategoryId == Guid.Empty ? "Choose a category for this expense." : null;
+        saveError = null;
+        savedMessage = null;
+        if (categoryError is not null)
+            return;
+
+        isSaving = true;
+        try
+        {
+            await ExpenseService.AddExpenseAsync(new CreateExpenseRequest(
+                form.Description,
+                form.Amount,
+                DateOnly.FromDateTime(form.Date),
+                form.CategoryId,
+                form.Notes));
+            expenses = (await ExpenseService.GetExpensesAsync()).ToList();
+            selectedMonth = form.Date.ToString("yyyy-MM");
+            savedMessage = "Expense saved.";
+            form = new ExpenseForm
+            {
+                CategoryId = categories.FirstOrDefault(category => category.Name == "Food & Dining")?.Id ?? categories.FirstOrDefault()?.Id ?? Guid.Empty,
+                Date = DateTime.Today
+            };
+        }
+        catch (Exception)
+        {
+            saveError = "We couldn’t save that expense. Please check the details and try again.";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private static string FormatCurrency(decimal value) => value.ToString("C0", IndonesianCulture);
+
+    private static string MonthLabel(string value) =>
+        DateOnly.ParseExact($"{value}-01", "yyyy-MM-dd", CultureInfo.InvariantCulture)
+            .ToString("MMMM yyyy", CultureInfo.GetCultureInfo("en-US"));
+
+    private static string CategoryMark(string category) => category switch
+    {
+        "Food & Dining" => "✦",
+        "Transport" => "↗",
+        "Groceries" => "⌂",
+        "Bills & Utilities" => "▤",
+        "Shopping" => "◇",
+        "Health" => "+",
+        "Entertainment" => "♪",
+        _ => "•"
+    };
+
+    private sealed class ExpenseForm
+    {
+        [Required, StringLength(120)]
+        public string Description { get; set; } = string.Empty;
+
+        [Range(typeof(decimal), "1", "1000000000000")]
+        public decimal Amount { get; set; }
+
+        public Guid CategoryId { get; set; }
+
+        [Required]
+        public DateTime Date { get; set; } = DateTime.Today;
+
+        [StringLength(500)]
+        public string? Notes { get; set; }
+    }
+}

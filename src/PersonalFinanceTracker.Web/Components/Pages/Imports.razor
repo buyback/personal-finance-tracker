@@ -1,0 +1,170 @@
+@page "/imports"
+@inject IExpenseStatementImportService ImportService
+@inject ILogger<Imports> Logger
+
+<PageTitle>Import statement | Financial Tracker</PageTitle>
+
+<div class="page-heading">
+    <div>
+        <p class="eyebrow">BRING YOUR SPENDING TOGETHER</p>
+        <h1>Import a statement</h1>
+        <p class="page-subtitle">Upload a GoPay monthly e-statement, review each transaction, and add it to your spending dashboard.</p>
+    </div>
+    <a class="button-secondary" href="/expenses">← Back to expenses</a>
+</div>
+
+<section class="panel import-panel">
+    <div class="panel-heading">
+        <div><h2>Choose a PDF statement</h2><p>Your file is read for the import and is not saved by the app.</p></div>
+    </div>
+    <div class="import-picker">
+        <InputFile OnChange="PreviewStatementAsync" accept="application/pdf,.pdf" disabled="@isBusy" />
+        <span>GoPay e-statement · up to 10 MB</span>
+    </div>
+    @if (errorMessage is not null)
+    {
+        <div class="form-alert form-alert-error import-message">@errorMessage</div>
+    }
+    @if (resultMessage is not null)
+    {
+        <div class="form-alert form-alert-success import-message">@resultMessage <a href="/">View dashboard →</a></div>
+    }
+</section>
+
+@if (preview is not null)
+{
+    <section class="panel import-preview">
+        <div class="panel-heading import-summary-heading">
+            <div>
+                <p class="eyebrow">@preview.Provider STATEMENT</p>
+                <h2>@preview.PeriodStart.ToString("dd MMM yyyy") – @preview.PeriodEnd.ToString("dd MMM yyyy")</h2>
+                <p>Review the suggested category for each transaction before importing.</p>
+            </div>
+            <div class="import-total"><span>@IncludedRows.Count() selected</span><strong>@FormatCurrency(SelectedTotal)</strong></div>
+        </div>
+        @if (preview.SkippedNonExpenseCount > 0)
+        {
+            <div class="import-note">@preview.SkippedNonExpenseCount incoming or non-expense transaction(s) excluded.</div>
+        }
+        @if (DuplicateCount > 0)
+        {
+            <div class="import-note">@DuplicateCount transaction(s) were already imported and are unchecked.</div>
+        }
+        <div class="import-table-wrap">
+            <table class="import-table">
+                <thead><tr><th><span class="visually-hidden">Include</span></th><th>Transaction</th><th>Date</th><th>Category</th><th class="amount-column">Amount</th></tr></thead>
+                <tbody>
+                    @foreach (var row in rows)
+                    {
+                        <tr @key="row.Item.ExternalReference" class="@(row.Item.IsDuplicate ? "duplicate-row" : null)">
+                            <td><input type="checkbox" aria-label="Include @row.Item.Description" @bind="row.Include" /></td>
+                            <td><strong>@row.Item.Description</strong>@if (row.Item.PaymentMethod is not null) { <small>@row.Item.PaymentMethod</small> }</td>
+                            <td>@row.Item.SpentOn.ToString("dd MMM yyyy")</td>
+                            <td>
+                                <select class="field-input import-category" aria-label="Category for @row.Item.Description" @bind="row.CategoryId">
+                                    @foreach (var category in preview.Categories)
+                                    {
+                                        <option value="@category.Id">@category.Name</option>
+                                    }
+                                </select>
+                            </td>
+                            <td class="amount-column">−@FormatCurrency(row.Item.Amount)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="import-actions">
+            <span>Statement total: <strong>@FormatCurrency(preview.ExpenseTotal)</strong></span>
+            <button class="button-primary" @onclick="ImportSelectedAsync" disabled="@(isBusy || !IncludedRows.Any())">
+                @(isBusy ? "Importing…" : $"Import {IncludedRows.Count()} transactions") <span aria-hidden="true">→</span>
+            </button>
+        </div>
+    </section>
+}
+
+@code {
+    private const long MaximumUploadBytes = 10 * 1024 * 1024;
+    private static readonly CultureInfo IndonesianCulture = CultureInfo.GetCultureInfo("id-ID");
+    private ExpenseStatementPreview? preview;
+    private List<ImportRow> rows = [];
+    private bool isBusy;
+    private string? errorMessage;
+    private string? resultMessage;
+
+    private IEnumerable<ImportRow> IncludedRows => rows.Where(row => row.Include);
+    private int DuplicateCount => rows.Count(row => row.Item.IsDuplicate);
+    private decimal SelectedTotal => IncludedRows.Sum(row => row.Item.Amount);
+
+    private async Task PreviewStatementAsync(InputFileChangeEventArgs args)
+    {
+        preview = null;
+        rows = [];
+        errorMessage = resultMessage = null;
+        var file = args.File;
+        if (!file.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            errorMessage = "Choose a PDF statement.";
+            return;
+        }
+
+        isBusy = true;
+        try
+        {
+            await using var stream = file.OpenReadStream(MaximumUploadBytes);
+            preview = await ImportService.PreviewAsync(stream);
+            rows = preview.Items.Select(item => new ImportRow(item, !item.IsDuplicate)).ToList();
+        }
+        catch (IOException)
+        {
+            errorMessage = "The PDF could not be read. Check that it is under 10 MB and try again.";
+        }
+        catch (InvalidDataException exception)
+        {
+            errorMessage = exception.Message;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Failed to parse uploaded expense statement {FileName}.", file.Name);
+            errorMessage = "We couldn’t read this statement. Check that it is a valid GoPay e-statement PDF and try again.";
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private async Task ImportSelectedAsync()
+    {
+        if (preview is null)
+            return;
+
+        isBusy = true;
+        errorMessage = resultMessage = null;
+        try
+        {
+            var selected = IncludedRows.Select(row => row.Item with { CategoryId = row.CategoryId }).ToList();
+            var result = await ImportService.ImportAsync(preview, selected);
+            resultMessage = $"Imported {result.ImportedCount} transaction(s); skipped {result.DuplicateCount} duplicate(s).";
+            preview = null;
+            rows = [];
+        }
+        catch (Exception)
+        {
+            errorMessage = "We couldn’t save the selected transactions. Please retry.";
+        }
+        finally
+        {
+            isBusy = false;
+        }
+    }
+
+    private static string FormatCurrency(decimal value) => value.ToString("C0", IndonesianCulture);
+
+    private sealed class ImportRow(ExpenseStatementPreviewItem item, bool include)
+    {
+        public ExpenseStatementPreviewItem Item { get; } = item;
+        public bool Include { get; set; } = include;
+        public Guid CategoryId { get; set; } = item.CategoryId;
+    }
+}
